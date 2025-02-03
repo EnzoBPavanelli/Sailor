@@ -138,13 +138,33 @@ def manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, w
             temp = hdgtowind1
             hdgtowind1 = hdgtowind2
             hdgtowind2 = temp
-        if diff == 90 and abs(hdgtowind1) == 45 and abs(hdgtowind2) == 45:
-            return man_cost * 0.5
-        elif hdgtowind1 == 135 and hdgtowind2 == -135:
+
+
+
+
+
+        #nova função de calculo de jibe e tacking
+        #se vento passa de positivo para negativo ou inverso, e vento <90 (vento vindo de frente), ==jibe
+        #se vento passa de positivo para negativo ou inverso, e vento >90 (vento vindo de trás), ==tacking
+        if np.sign(hdgtowind1)!=np.sign(hdgtowind2):
+            if hdgtowind2 <90:
+                #jibe
+                return man_cost * 2.5
+            else:
+                #tacking
             return man_cost
-        elif diff > 90:
-            return man_cost * 1
-        return 0
+
+
+
+
+
+        # if diff == 90 and abs(hdgtowind1) == 45 and abs(hdgtowind2) == 45:
+        #     return man_cost * 0.5
+        # elif hdgtowind1 == 135 and hdgtowind2 == -135:
+        #     return man_cost
+        # elif diff > 90:
+        #     return man_cost * 1
+        # return 0
 def angle_cost(current_pos,candidate,last_pos,boat_dir):
     def normalize_angle(angle):
         return (angle + 180) % 360 - 180
