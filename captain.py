@@ -1,4 +1,4 @@
-#!/home/enzo/miniconda3/envs/esailor/bin/python
+#!/home/enz/miniconda3/envs/esailor/bin/python
 
 import numpy as np
 import time
@@ -113,7 +113,8 @@ class captain():
         for k, waypoint in enumerate(self.waypoints_list):
             dist2goal = np.linalg.norm(np.subtract(waypoint, self.cps))
             steps     = 0
-            while (dist2goal > 5) & (steps < 1000):
+            distancia_limite = 3 if k == len(self.waypoints_list) - 1 else 5
+            while (dist2goal > distancia_limite) & (steps < 1000):
                 truewind, truewind_angle = self.trueWindEstimation()
                 true_line = np.subtract(waypoint, self.cps)
                 dist2goal = np.linalg.norm(true_line)
@@ -164,20 +165,22 @@ class captain():
             print(self.pos_barco)
 
             def calcular_distancia_total(pos_barco):
-                if len(pos_barco) <= 1:
-                    return 0  # Se houver 0 ou 1 ponto, a distância total é zero
+                if len(pos_barco) < 2:
+                    return 0  # Sem deslocamento se houver 0 ou 1 ponto
 
-                # Remove o primeiro elemento
-                pos_barco = pos_barco[1:]
-
-                # Calcula as distâncias entre os pontos consecutivos
                 distancia_total = 0
+
                 for i in range(1, len(pos_barco)):
-                    distancia_total += np.linalg.norm(pos_barco[i] - pos_barco[i - 1])
+                    ponto_anterior = np.array(pos_barco[i - 1])
+                    ponto_atual = np.array(pos_barco[i])
+                    dist = np.linalg.norm(ponto_atual - ponto_anterior)  # Calcula a distância entre pontos consecutivos
 
-                # Adiciona a distância do último ponto ao objetivo final
-                distancia_total += np.linalg.norm(np.array([100, 0]) - pos_barco[-1])
+                    print(
+                        f"Movimento {i}: de {ponto_anterior} para {ponto_atual} -> Distância percorrida: {dist:.2f}")  # Depuração
 
+                    distancia_total += dist  # Soma corretamente todas as movimentações
+
+                print(f"\nDistância total percorrida pelo barco: {distancia_total:.2f} metros")  # Depuração final
                 return distancia_total
 
             self.totaldist = calcular_distancia_total(self.pos_barco)
@@ -250,10 +253,90 @@ def hysteresis_potential(current_pos, candidate, wind_direction, fiup, fidown, g
     return ph
 
 
+def manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, wind):
+    def normalize_angle(angle):
+        """Normaliza um ângulo para o intervalo [-180, 180]."""
+        return (angle + 180) % 360 - 180
+
+    if last_pos == []:
+        hdg1 = 180  # Direção inicial padrão (assumindo que parte contra o vento)
+    else:
+        hdg1 = heading(last_pos, current_pos)  # Direção do último movimento
+
+    hdg2 = heading(current_pos, candidate)  # Direção do próximo movimento
+
+    # Normaliza os ângulos
+    hdg1 = normalize_angle(hdg1)
+    hdg2 = normalize_angle(hdg2)
+
+    # Converte os ângulos para o sistema relativo ao vento
+    hdgtowind1 = normalize_angle(hdg_towind(hdg1, wind))
+    hdgtowind2 = normalize_angle(hdg_towind(hdg2, wind))
+
+    # Calcula a menor diferença angular
+    diff = abs(hdgtowind2 - hdgtowind1)
+    if diff > 180:
+        diff = 360 - diff  # Garante que a diferença não ultrapasse 180°
+
+    # Detecta mudanças de bordo corretamente
+    crossing_tack = (hdgtowind1 * hdgtowind2 < 0) and (abs(hdgtowind1) > 90 or abs(hdgtowind2) > 90)
+
+    # **Suavização do tacking e jibe**
+    smooth_transition_threshold = 15  # Apenas permite mudanças de direção menores que 15 graus por vez
+
+    if crossing_tack:
+        if abs(hdgtowind2) > 90:  # Jibe (mudança de bordo a favor do vento)
+            if diff > smooth_transition_threshold:
+                return man_cost * 3.0 + (diff - smooth_transition_threshold) * 0.5  # Penalização extra se for muito brusco
+            return man_cost * 3.0  # Jibe normal
+        else:  # Tacking (mudança de bordo contra o vento)
+            if diff > smooth_transition_threshold:
+                return man_cost * 5.0 + (diff - smooth_transition_threshold) * 0.8  # Penalização extra se for muito brusco
+            return man_cost * 5.0  # Tack normal
+
+    # **Pequenos ajustes de ângulo não devem ser muito penalizados**
+    return diff / 20  # Suaviza mudanças menores
+
+
+def angle_cost(current_pos, candidate, last_pos, boat_dir):
+    def normalize_angle(angle):
+        """Normaliza um ângulo para o intervalo [-180, 180]."""
+        return (angle + 180) % 360 - 180
+
+    def angle_difference(angle1, angle2):
+        """Retorna a menor diferença angular entre dois ângulos normalizados."""
+        diff = abs(angle1 - angle2)
+        return min(diff, 360 - diff)
+
+    def is_forward_movement(current_pos, candidate, reference_dir):
+        """Verifica se o movimento está dentro de uma margem de 90° para frente."""
+        move_dir = normalize_angle(heading(current_pos, candidate))
+        reference_dir = normalize_angle(reference_dir)
+        diff = angle_difference(move_dir, reference_dir)
+        return diff <= 90  # Mantém movimento dentro de um ângulo natural
+
+    # Se for a primeira iteração, verificar se está indo para frente
+    if last_pos == []:
+        if not is_forward_movement(current_pos, candidate, boat_dir):
+            return float('inf')  # Penaliza fortemente movimentos para trás
+
+        hdg1 = normalize_angle(boat_dir)
+        hdg2 = normalize_angle(heading(current_pos, candidate))
+        return angle_difference(hdg1, hdg2) /1  # Reduz a penalização
+
+    else:
+        hdg1 = normalize_angle(heading(last_pos, current_pos))
+        hdg2 = normalize_angle(heading(current_pos, candidate))
+        return angle_difference(hdg1, hdg2) / 5  # Suaviza as mudanças de ângulo
+
+
+
+
 def generate_waypoints_with_potential(start, goal, obstacles, wind):
-    g, k, gup, gdown, gh, fiup, fidown = 15, 200, 30, 20, 15, 45, 20
+    #g, k, gup, gdown, gh, fiup, fidown = 15, 200, 15, 8, 15, 45, 20
+    g, k, gup, gdown, gh, fiup, fidown = 10, 200, 10, 5, 2, 45, 15
     boat_dir=180
-    man_cost = 1
+    man_cost = 0.3
     ang_cost = 90
     waypoints = [start]
     current_pos = np.array(start)
@@ -265,7 +348,7 @@ def generate_waypoints_with_potential(start, goal, obstacles, wind):
     last_pos = []
     candidate_positions=[(0.0, 5.0),(0.8675, 4.915),(1.71, 4.805),(2.5, 4.61),(3.29, 4.305),(4.08, 3.89),(4.805, 3.29),(5.475, 2.5),(6.05, 1.71),(6.505, 0.8675),(6.805, 0.0),(6.505, -0.8675),(6.05, -1.71),(5.475, -2.5),(4.805, -3.29),(4.08, -3.89),(3.29, -4.305),(2.5, -4.61),(1.71, -4.805),(0.8675, -4.915),(0.0, -5.0),(-0.8675, -4.915),(-1.71, -4.805),(-2.5, -4.61),(-3.29, -4.305),(-4.08, -3.89),(-4.805, -3.29),(-5.475, -2.5),(-6.05, -1.71),(-6.505, -0.8675),(-6.805, 0.0),(-6.505, 0.8675),(-6.05, 1.71),(-5.475, 2.5),(-4.805, 3.29),(-4.08, 3.89),(-3.29, 4.305),(-2.5, 4.61),(-1.71, 4.805),(-0.8675, 4.915),(0.0, 5.0)]
     # Loop principal para gerar waypoints
-    multiplicador=2
+    multiplicador=1
     candidate_positions_scaled = [(x * multiplicador, y * multiplicador) for x, y in candidate_positions]
 
     while np.linalg.norm(current_pos - goal) > 8 and iterations < max_iterations:
@@ -285,11 +368,13 @@ def generate_waypoints_with_potential(start, goal, obstacles, wind):
 
             # Calcular o potencial total para essa posição candidata
             total_potential = (
-                    attractive_potential(candidate[0], candidate[1], goal, g) +
-                    repulsive_potential(candidate[0], candidate[1], obstacles, k)+
-                    upwind_potential(current_pos, candidate, wind, fiup, gup)+
-                    downwind_potential(current_pos, candidate, wind, fidown, gdown)+
-                    hysteresis_potential(current_pos, candidate, wind, fiup, fidown, gh)
+                    + attractive_potential(candidate[0], candidate[1], goal, g)
+                    + repulsive_potential(candidate[0], candidate[1], obstacles, k)
+                    + upwind_potential(current_pos, candidate, wind, fiup, gup)
+                    + downwind_potential(current_pos, candidate, wind, fidown, gdown)
+                    #+ hysteresis_potential(current_pos, candidate, wind, fiup, fidown, gh)
+                    + manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, wind)
+                    + angle_cost(current_pos,candidate,last_pos,boat_dir)
             )
 
             # Armazenar a posição candidata e seu valor de potencial
@@ -361,7 +446,7 @@ def plot_and_save_results(temporary_waypoints, obstacle_positions, real_position
             ax.plot(real_pos[:, 0], real_pos[:, 1], color="red", label="Boat Trajectory")
 
         # Ajustar os limites dos eixos para aumentar a área de plotagem
-        ax.set_xlim(0, 120)  # Ajustar os limites do eixo X
+        ax.set_xlim(0, 100)  # Ajustar os limites do eixo X
         ax.set_ylim(-100, 100)  # Ajustar os limites do eixo Y
 
         # Plotar o waypoint principal
@@ -371,8 +456,7 @@ def plot_and_save_results(temporary_waypoints, obstacle_positions, real_position
         for i, obs_pos in enumerate(obstacle_positions):
             ax.add_patch(plt.Rectangle((obs_pos[0] - 0.5, obs_pos[1] - 0.5), 1.5,
                                        1.5, color='blue', label="Obstacle" if i == 0 else "", zorder=4))
-        ax.scatter(100,0, color="green",
-                   marker="o", s=200, label=f"Waypoint {1}", zorder=6)
+        #ax.scatter(100,0, color="green",marker="o", s=200, label=f"Waypoint {1}", zorder=6)
 
 
 
@@ -419,13 +503,13 @@ def calcular_distancia_total(pos_barco):
 def main():
     cap = captain()
     start = (0.0, 0.0)
-    goal = (100.0, 100.0)
+    goal = (100.0, 0.0)
     obstacles = [(20, 2), (20, 0), (20, -2), (20, -5), (20, -7), (20, -10), (25, 10), (30, -5)]
     wind_direction = 0
     wind = wind_direction - 180
     waypoints, potentials_data = generate_waypoints_with_potential(start, goal, obstacles, wind)
     print(waypoints)
-    # plot_before(waypoints,obstacles)
+    plot_before(waypoints,obstacles)
     cap.setMission(np.array(waypoints, dtype=np.float32))
     cap.engage()
     boat_positions = np.array(cap.pos_barco, dtype=np.float32)
