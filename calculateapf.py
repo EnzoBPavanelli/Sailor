@@ -152,7 +152,7 @@ def manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, w
                 return man_cost * 2.5
             else:
                 #tacking
-            return man_cost
+                return man_cost
 
 
 
