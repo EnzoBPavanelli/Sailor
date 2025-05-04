@@ -8,10 +8,11 @@ import rospy
 from std_msgs.msg import Int16, Float32, Float32MultiArray
 from sensor_msgs.msg import LaserScan
 
-#from src.Yara_OVE.esailor.tmp import waypoints
+
+
 distanciatotal=0
 class captain():
-    def __init__(self, frequence = 1.0):
+    def __init__(self, frequence = 2.0):
         self.cps            = None
         self.apwind_speed   = 0
         self.apwind_angle   = 0
@@ -19,9 +20,34 @@ class captain():
         self.boat_vel       = np.zeros(2, dtype=np.float32)
         self.laser_scan     = np.zeros(5, dtype=int)
         self.waypoints_list = None
+        self.obstacles=[(50,0),(48,2),(75,-8)]
+        #self.obstacles= [(75, -15), (75, 0), (75, 15), (75, 30),(50,-20), (75, 45), (75, 60), (75, 75), (75, 90), (90,-35),(75, 105), (75, 120), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45), (120, -60), (120, -75), (120, -90), (120, -105), (120, -120)]
         self.pos_barco = []
         self.timestep       = 1.0 / frequence
         self._cps_log       = []
+        self.K_ATT = 300.0
+        self.K_REP = 50000.0
+        self.RHO_0 = 30.0
+
+        # --- Parâmetros de Navegação e Vento ---
+        self.WIND_DIRECTION_MET_DEG = 180.0
+        self.UPWIND_NO_GO_HALF_ANGLE_DEG = 45.0
+        self.DOWNWIND_NO_GO_HALF_ANGLE_DEG = 15.0
+
+        # --- Parâmetros de Histerese (Diferenciados) ---
+        self.GH_UPWIND = 300.0
+        self.GH_DOWNWIND = 250.0
+
+        # --- Parâmetros da Simulação ---
+        self.STEP_SIZE = 0.1
+        self.MAX_ITERS = 3000
+        self.TOL = 2.1
+        self.WIND_MATH_DEG = self.WIND_DIRECTION_MET_DEG
+        self.UPWIND_MATH_DEG = (self.WIND_MATH_DEG + 180) % 360
+        self.WIND_VECTOR_MATH = np.array([np.cos(np.radians(self.WIND_MATH_DEG)), np.sin(np.radians(self.WIND_MATH_DEG))])
+        self.WIND_PERP_LEFT = np.array([-self.WIND_VECTOR_MATH[1], self.WIND_VECTOR_MATH[0]])
+        self.WIND_PERP_RIGHT = np.array([self.WIND_VECTOR_MATH[1], -self.WIND_VECTOR_MATH[0]])
+
 
 
         #
@@ -104,6 +130,220 @@ class captain():
         return truewind, truewind_angle * np.sign(truewind[1])
 
 
+
+    def attractive_force(self,pos, goal, k_att):
+        """Calcula a força atrativa linear em direção ao objetivo."""
+        return k_att * (goal - pos)
+
+    # def repulsive_force(self,pos, obstacles, k_rep, rho_0):
+    #     """Calcula a força repulsiva total devido aos obstáculos próximos."""
+    #     F_rep = np.zeros(2)
+    #     if not obstacles: return F_rep
+    #     for obs in obstacles:
+    #         diff = pos - obs
+    #         rho = np.linalg.norm(diff)
+    #         if 0 < rho <= rho_0:
+    #             if rho < 1e-6: continue
+    #             gradient_magnitude = k_rep * ((1 / rho) - (1 / rho_0)) * (1 / rho **2)
+    #             F_rep += gradient_magnitude * (diff / rho)
+    #     print("FORCA REPULSIVA: ",F_rep)
+    #     return F_rep
+
+    def repulsive_force(self, pos, obstacles, k_rep, rho_0,goal):
+        """Calcula a força repulsiva total de forma simples."""
+        F_rep = np.zeros(2)  # Inicia o vetor de força repulsiva
+        if not obstacles:
+            return F_rep
+
+        for obs in obstacles:
+            diff = pos - obs  # Vetor que vai do obstáculo até o barco
+            rho = np.linalg.norm(diff)  # Distância até o obstáculo
+            diffgoal=pos-goal
+            diffobs=obs-goal
+            rhobarcoway=np.linalg.norm(diffgoal)
+            print("DISTANCIA BARCO ->WAY:",rhobarcoway)
+            rhoobsway=np.linalg.norm(diffobs)
+            print("DISTANCIA OBS ->WAY:",rhoobsway)
+            # Aplica força repulsiva somente se o obstáculo estiver dentro do alcance
+            if 0 < rho <= rho_0:
+                # A força aumenta proporcionalmente ao inverso da distância
+                gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
+
+                # Aplica a força ao vetor direção (gradiente) do obstáculo
+                F_rep += gradient_magnitude * (diff / rho)
+
+        print("FORÇA REPULSIVA: ", F_rep)  # Para depuração
+        return F_rep
+
+    # def repulsive_force(self, pos, obstacles, k_rep, rho_0,goal):
+    #     """Calcula a força repulsiva total de forma simples."""
+    #     F_rep = np.zeros(2)  # Inicia o vetor de força repulsiva
+    #     if not obstacles:
+    #         return F_rep
+    #
+    #     for obs in obstacles:
+    #         diff = pos - obs  # Vetor que vai do obstáculo até o barco
+    #         rho = np.linalg.norm(diff)  # Distância até o obstáculo
+    #         diffgoal=pos-goal
+    #         diffobs=obs-goal
+    #         rhobarcoway=np.linalg.norm(diffgoal)
+    #         print("DISTANCIA BARCO ->WAY:",rhobarcoway)
+    #         rhoobsway=np.linalg.norm(diffobs)
+    #         print("DISTANCIA OBS ->WAY:",rhoobsway)
+    #         # Aplica força repulsiva somente se o obstáculo estiver dentro do alcance
+    #         if 0 < rho <= rho_0:
+    #             if rhobarcoway>rhoobsway:
+    #                 # A força aumenta proporcionalmente ao inverso da distância
+    #                 gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
+    #
+    #                 # Aplica a força ao vetor direção (gradiente) do obstáculo
+    #                 F_rep += gradient_magnitude * (diff / rho)
+    #
+    #     print("FORÇA REPULSIVA: ", F_rep)  # Para depuração
+    #     return F_rep
+
+    # ---- FUNÇÃO MODIFICADA ----
+    def calculate_hysteresis_force(self,current_heading_deg, upwind_math_deg, Gh_upwind, Gh_downwind):
+        """
+        Calcula a força de histerese com ganhos diferenciados para upwind/downwind.
+        """
+        Fh = np.zeros(2)
+        # Calcula ângulo do vento relativo ao heading ATUAL
+        relative_wind_deg = self.shortest_angle_diff(current_heading_deg, upwind_math_deg)
+
+        # Determina qual ganho usar baseado no ângulo relativo
+        # Se |ângulo| <= 90, considera upwind/reaching, usa Gh_upwind
+        # Se |ângulo| > 90, considera downwind/reaching, usa Gh_downwind
+        if abs(relative_wind_deg) <= 90.0:
+            current_Gh = Gh_upwind
+            # print(f"Iter using Gh_upwind = {current_Gh}") # Debug opcional
+        else:
+            current_Gh = Gh_downwind
+            # print(f"Iter using Gh_downwind = {current_Gh}") # Debug opcional
+
+        # Aplica força lateral baseada no bordo com o ganho apropriado
+        if relative_wind_deg > 1e-6:  # Bombordo (Vento relativo da Esquerda)
+            Fh = current_Gh * self.WIND_PERP_LEFT  # Força para Esquerda
+        elif relative_wind_deg < -1e-6:  # Estibordo (Vento relativo da Direita)
+            Fh = current_Gh * self.WIND_PERP_RIGHT  # Força para Direita
+
+        return Fh
+
+    # ---- FIM DA MODIFICAÇÃO ----
+
+    # ==============================================================================
+    # --- FUNÇÕES AUXILIARES DE ÂNGULO E RESTRIÇÕES ---
+    # ==============================================================================
+    # (calculate_angle_deg, shortest_angle_diff, is_in_no_go_zone,
+    #  find_closest_edge_heading, apply_no_go_constraints - sem alterações)
+    def calculate_angle_deg(self,vector):
+        if np.linalg.norm(vector) < 1e-6: return 0.0
+        angle_rad = np.arctan2(vector[1], vector[0])  # Y, X
+        angle_deg = np.degrees(angle_rad)
+        return (angle_deg + 360) % 360
+
+    def shortest_angle_diff(self,angle1_deg, angle2_deg):
+        diff = (angle2_deg - angle1_deg + 180) % 360 - 180
+        return diff
+
+    def is_in_no_go_zone(self,heading_deg, zone_center_deg, zone_half_angle):
+        diff = self.shortest_angle_diff(zone_center_deg, heading_deg)
+        return abs(diff) <= zone_half_angle + 1e-9
+
+    def find_closest_edge_heading(self,heading_deg, zone_center_deg, zone_half_angle):
+        diff = self.shortest_angle_diff(zone_center_deg, heading_deg)
+        if diff >= 0:
+            return (zone_center_deg + zone_half_angle) % 360
+        else:
+            return (zone_center_deg - zone_half_angle + 360) % 360
+
+    def apply_no_go_constraints(self,desired_heading_deg, desired_direction):
+        final_heading_deg = desired_heading_deg
+        final_direction = desired_direction
+        adjusted = False
+        if self.is_in_no_go_zone(desired_heading_deg, self.UPWIND_MATH_DEG, self.UPWIND_NO_GO_HALF_ANGLE_DEG):
+            final_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.UPWIND_MATH_DEG,
+                                                          self.UPWIND_NO_GO_HALF_ANGLE_DEG)
+            adjusted = True
+        elif self.is_in_no_go_zone(desired_heading_deg, self.WIND_MATH_DEG, self.DOWNWIND_NO_GO_HALF_ANGLE_DEG):
+            final_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.WIND_MATH_DEG,
+                                                          self.DOWNWIND_NO_GO_HALF_ANGLE_DEG)
+            adjusted = True
+        if adjusted:
+            final_heading_rad = np.radians(final_heading_deg)
+            final_direction = np.array([np.cos(final_heading_rad), np.sin(final_heading_rad)])
+        return final_direction, final_heading_deg
+
+    def run_simulation(self,X_ROBOT_START,X_GOAL):
+        x_robot = X_ROBOT_START.copy()
+        trajectory = [x_robot.copy()]
+        headings_deg_history = []
+        initial_goal_dir = X_GOAL - x_robot
+        current_heading_deg = self.calculate_angle_deg(initial_goal_dir) if np.linalg.norm(initial_goal_dir) > 1e-6 else 0.0
+        headings_deg_history.append(current_heading_deg)
+
+        #print("Iniciando simulação...")
+        goal_reached = False
+        for i in range(1):
+            F_att = self.attractive_force(x_robot, X_GOAL, self.K_ATT)
+            F_rep = self.repulsive_force(x_robot, self.obstacles, self.K_REP, self.RHO_0,X_GOAL)
+            Fh = self.calculate_hysteresis_force(current_heading_deg, self.UPWIND_MATH_DEG, self.GH_UPWIND, self.GH_DOWNWIND)
+            F_total = F_att + F_rep + Fh
+
+            # --- NOVA LÓGICA: Calcula o heading desejado e a diferença angular ---
+            desired_heading_deg = self.calculate_angle_deg(F_total)  # Ângulo do vetor de força resultante
+            delta_heading = self.shortest_angle_diff(current_heading_deg,
+                                                desired_heading_deg)  # Diferença angular (-180 a 180)
+
+            # Aplica restrições de no-go zones ao ângulo desejado
+            constrained_heading_deg = desired_heading_deg
+            if self.is_in_no_go_zone(desired_heading_deg, self.UPWIND_MATH_DEG, self.UPWIND_NO_GO_HALF_ANGLE_DEG):
+                constrained_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.UPWIND_MATH_DEG,
+                                                                    self.UPWIND_NO_GO_HALF_ANGLE_DEG)
+            elif self.is_in_no_go_zone(desired_heading_deg, self.WIND_MATH_DEG, self.DOWNWIND_NO_GO_HALF_ANGLE_DEG):
+                constrained_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.WIND_MATH_DEG,
+                                                                    self.DOWNWIND_NO_GO_HALF_ANGLE_DEG)
+
+            # Atualiza a diferença angular após as restrições
+            delta_heading = self.shortest_angle_diff(current_heading_deg, constrained_heading_deg)
+
+            # Debug: Mostra a diferença angular e decisão de virar
+            # print(
+            #     f"Iteração {i + 1}: Heading atual = {current_heading_deg:.1f}°, Desejado = {desired_heading_deg:.1f}°, Delta = {delta_heading:.1f}°")
+
+            # --- Movimento do barco ---
+            # Aqui você pode usar `delta_heading` para controlar o leme do barco.
+            # Por simplicidade, vamos assumir que o barco vira instantaneamente para o novo heading.
+            current_heading_deg = constrained_heading_deg
+            heading_rad = np.radians(current_heading_deg)
+            movement_direction = np.array([np.cos(heading_rad), np.sin(heading_rad)])
+            x_robot = x_robot + self.STEP_SIZE * movement_direction
+
+            # Armazena trajetória e histórico de headings
+            trajectory.append(x_robot.copy())
+            headings_deg_history.append(current_heading_deg)
+
+            # Verifica se o objetivo foi alcançado
+            if np.linalg.norm(x_robot - X_GOAL) <= self.TOL:
+                #print(f"\nObjetivo alcançado na iteração {i + 1}!")
+                goal_reached = True
+                break
+
+        # if not goal_reached:
+        #     print(f"\nObjetivo não alcançado após {1000} iterações.")
+
+        #return np.array(trajectory), np.array(headings_deg_history)
+        return desired_heading_deg
+
+
+
+
+
+
+
+
+
+
     def engage(self):
         while np.any(self.cps) == None:
             # print(f"CPS: {self.cps}")
@@ -113,7 +353,7 @@ class captain():
         for k, waypoint in enumerate(self.waypoints_list):
             dist2goal = np.linalg.norm(np.subtract(waypoint, self.cps))
             steps     = 0
-            distancia_limite = 3 if k == len(self.waypoints_list) - 1 else 5
+            distancia_limite = 4 if k == len(self.waypoints_list) - 1 else 5
             while (dist2goal > distancia_limite) & (steps < 1000):
                 truewind, truewind_angle = self.trueWindEstimation()
                 true_line = np.subtract(waypoint, self.cps)
@@ -127,18 +367,18 @@ class captain():
                     goal_angle *= -1
                 else:
                     pass
-
-                if abs(truewind_angle) > 136: #--> truewind_angle is the true wind vector angle from the surge axis
-                    self.propPwr_pub.publish( 2 )
-                else:
-                    self.propPwr_pub.publish( 0 )
+                self.propPwr_pub.publish(0)
+                # if abs(truewind_angle) > 136: #--> truewind_angle is the true wind vector angle from the surge axis
+                #     self.propPwr_pub.publish( 2 )
+                # else:
+                #     self.propPwr_pub.publish( 0 )
 
                 print("--------------------------------")
                 print("apwind_angle  : {:5.2f}".format(self.apwind_angle))
                 print("truewind_angle: {:5.2f}".format(truewind_angle))
                 print("goal_angle    : {:5.2f}".format(goal_angle))
-                print("alpha         : {:5.2f}".format(alpha))
-                print("beta          : {:5.2f}".format(beta))
+                print("angulo barco: {:5.2f}".format(alpha))
+                print("angulo objetivo: {:5.2f}".format(beta))
                 print("dist to goal  : {:5.2f}".format(dist2goal))
                 print("Goiing ")
 
@@ -158,7 +398,18 @@ class captain():
 
                 # print("nav_angle     : {:5.2f}".format(nav_angle))
                 # self.nav_angle_pub.publish(np.float32(nav_angle))
-                self.nav_angle_pub.publish(np.float32(goal_angle))
+                anguloAPF=self.run_simulation(self.cps,waypoint)
+                anguloAPF= anguloAPF-alpha
+
+
+                if anguloAPF > 180:
+                    anguloAPF -= 360
+
+
+                print("ANGULO APF:",anguloAPF)
+                self.nav_angle_pub.publish(np.float32(anguloAPF))
+                #angulo apf- angulo barco
+                print("angulo publicado:",goal_angle)
                 self.pos_barco.append(np.copy(self.cps))
                 time.sleep(self.timestep)
                 steps += 1
@@ -259,7 +510,7 @@ def manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, w
         return (angle + 180) % 360 - 180
 
     if last_pos == []:
-        hdg1 = 180  # Direção inicial padrão (assumindo que parte contra o vento)
+        hdg1 = 180  # Direção inicial padrão
     else:
         hdg1 = heading(last_pos, current_pos)  # Direção do último movimento
 
@@ -281,21 +532,14 @@ def manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, w
     # Detecta mudanças de bordo corretamente
     crossing_tack = (hdgtowind1 * hdgtowind2 < 0) and (abs(hdgtowind1) > 90 or abs(hdgtowind2) > 90)
 
-    # **Suavização do tacking e jibe**
-    smooth_transition_threshold = 15  # Apenas permite mudanças de direção menores que 15 graus por vez
-
+    # Penalização de jibe e tack
     if crossing_tack:
         if abs(hdgtowind2) > 90:  # Jibe (mudança de bordo a favor do vento)
-            if diff > smooth_transition_threshold:
-                return man_cost * 3.0 + (diff - smooth_transition_threshold) * 0.5  # Penalização extra se for muito brusco
-            return man_cost * 3.0  # Jibe normal
+            return man_cost * 3.0  # Penalização fixa para jibe
         else:  # Tacking (mudança de bordo contra o vento)
-            if diff > smooth_transition_threshold:
-                return man_cost * 5.0 + (diff - smooth_transition_threshold) * 0.8  # Penalização extra se for muito brusco
-            return man_cost * 5.0  # Tack normal
+            return man_cost * 5.0  # Penalização maior para tack
 
-    # **Pequenos ajustes de ângulo não devem ser muito penalizados**
-    return diff / 20  # Suaviza mudanças menores
+    return diff / 10  # Pequenos ajustes de rumo têm penalização menor
 
 
 def angle_cost(current_pos, candidate, last_pos, boat_dir):
@@ -333,8 +577,8 @@ def angle_cost(current_pos, candidate, last_pos, boat_dir):
 
 
 def generate_waypoints_with_potential(start, goal, obstacles, wind):
-    #g, k, gup, gdown, gh, fiup, fidown = 15, 200, 15, 8, 15, 45, 20
-    g, k, gup, gdown, gh, fiup, fidown = 10, 200, 10, 5, 2, 45, 15
+    g, k, gup, gdown, gh, fiup, fidown = 15, 200, 30, 20, 15, 45, 20
+    #g, k, gup, gdown, gh, fiup, fidown = 3, 100, 10, 5, 2, 60, 15
     boat_dir=180
     man_cost = 0.3
     ang_cost = 90
@@ -372,9 +616,9 @@ def generate_waypoints_with_potential(start, goal, obstacles, wind):
                     + repulsive_potential(candidate[0], candidate[1], obstacles, k)
                     + upwind_potential(current_pos, candidate, wind, fiup, gup)
                     + downwind_potential(current_pos, candidate, wind, fidown, gdown)
-                    #+ hysteresis_potential(current_pos, candidate, wind, fiup, fidown, gh)
-                    + manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, wind)
-                    + angle_cost(current_pos,candidate,last_pos,boat_dir)
+                    + hysteresis_potential(current_pos, candidate, wind, fiup, fidown, gh)
+                    #+ manoeuvrability_cost(current_pos, candidate, man_cost, last_pos, ang_cost, wind)
+                    #+ angle_cost(current_pos,candidate,last_pos,boat_dir)
             )
 
             # Armazenar a posição candidata e seu valor de potencial
@@ -439,28 +683,32 @@ def plot_and_save_results(temporary_waypoints, obstacle_positions, real_position
 
         avg_speed = 0
 
-        # Plotar a trajetória, caminho A* e waypoints temporários
         fig, ax = plt.subplots(figsize=(10, 8))
         if len(real_positions) > 0:
             real_pos = np.array(real_positions)
             ax.plot(real_pos[:, 0], real_pos[:, 1], color="red", label="Boat Trajectory")
 
-        # Ajustar os limites dos eixos para aumentar a área de plotagem
-        ax.set_xlim(0, 100)  # Ajustar os limites do eixo X
+
+        ax.set_xlim(-25, 175)  # Ajustar os limites do eixo X
         ax.set_ylim(-100, 100)  # Ajustar os limites do eixo Y
 
-        # Plotar o waypoint principal
+        #ax.set_xlim(-75, 225)  # Ajustar os limites do eixo X
+        #ax.set_ylim(-175, 125)  # Ajustar os limites do eixo Y
+
+
         ax.scatter(0, 0, color="cyan", marker="o", s=200, label="Waypoint 0", zorder=6)
 
-        # Plotar os obstáculos
+
         for i, obs_pos in enumerate(obstacle_positions):
             ax.add_patch(plt.Rectangle((obs_pos[0] - 0.5, obs_pos[1] - 0.5), 1.5,
                                        1.5, color='blue', label="Obstacle" if i == 0 else "", zorder=4))
         #ax.scatter(100,0, color="green",marker="o", s=200, label=f"Waypoint {1}", zorder=6)
 
+        if len(temporary_waypoints) > 0:  # Corrigido para evitar ambiguidade
+            temp_wp = np.array(temporary_waypoints)
+            ax.scatter(temp_wp[:, 0], temp_wp[:, 1], color="green", marker="x", s=100, label="Temporary WP", zorder=5)
 
-
-        ax.legend(loc='lower right')
+        #ax.legend(loc='lower right')
         ax.grid(True)
         ax.set_xlabel("X Position")
         ax.set_ylabel("Y Position")
@@ -503,12 +751,75 @@ def calcular_distancia_total(pos_barco):
 def main():
     cap = captain()
     start = (0.0, 0.0)
-    goal = (100.0, 0.0)
-    obstacles = [(20, 2), (20, 0), (20, -2), (20, -5), (20, -7), (20, -10), (25, 10), (30, -5)]
-    wind_direction = 0
+    #goal = (0.0, 105.0)
+    #obstacles = [(20, 2), (20, 0), (20, -2), (20, -5), (20, -7), (20, -10), (25, 10), (30, -5)]
+    #obstacles = [(0,15), (15,15), (30,15), (45,15), (60,15)]
+    wind_direction = 90
     wind = wind_direction - 180
-    waypoints, potentials_data = generate_waypoints_with_potential(start, goal, obstacles, wind)
-    print(waypoints)
+    #waypoints, potentials_data = generate_waypoints_with_potential(start, goal, obstacles, wind)
+    #waypoints=[(15,45), (15,60), (0,105)]
+
+    #1
+    #goal = (150, -30)
+    #obstacles = [(75, -15), (75, 0), (75, 15), (75, 30), (75, 45), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45)]
+    #wind_direction= 90
+    #barbara:(somente com motor)
+    #waypoints=[(0, 0), (30, -15), (60, -30), (90, -45), (120, -60), (150, -30)]
+
+    #2024:
+    #waypoints=[(0, 0), (15, 0), (30, 0), (45, 0), (60, 0), (105, -15), (150, -30)]
+
+    #2010:
+    #waypoints=[(0, 0), (30, 0), (60, 0), (90, -15), (105, -30), (135, -45), (150, -30)]
+    #waypoints = [(0, 0), (15, 0), (30, 0), (45, 0), (60, 0),(60, 15), (60, 30), (60, 45), (60, 60), (75, 60),(90, 45), (105, 30), (120, 30), (135, 15), (150, 0),(150, 15), (135, 0), (150, -15), (165, -15),(150, -30), (150, -30)]
+
+    #wind= 0
+    #barbara:
+    #waypoints=[(0, 0), (30, -30), (60, -60), (90, -90), (120, -60), (150, -30)]
+
+    #2024:
+    #waypoints=[(0, 0), (30, -15), (75, -30), (105, -30), (150, -30)]
+
+    #2010:
+    # waypoints=[(0, 0), (30, -30), (60, -60), (90, -90), (120, -60), (150, -30)]
+
+
+
+
+
+    #2
+    goal = (100, 0)
+    obstacles =  [(75, -15), (75, 0), (75, 15), (75, 30), (75, 45), (75, 60), (50,-20),(90,-35), (75, 75), (75, 90), (75, 105), (75, 120), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45), (120, -60), (120, -75), (120, -90), (120, -105), (120, -120)]
+    #wind=0
+    obstacles=[(50,0),(48,2),(75,-8)]
+    #barbara:(somente com motor)
+    #waypoints =[(0, 0), (15, -30), (30, -60), (45, -90), (75, -120), (105, -150), (135, -120), (165, -90), (180, -60), (150, -30)]
+
+    #2024:
+    #waypoints =[(0, 0), (30, -15), (75, -30), (105, -45), (150, -30)]
+    waypoints=[(0,0),(100,0)]
+
+    #2010:
+    #waypoints =[(0, 0), (30, -30), (60, -60), (90, -90), (105, -120), (135, -150), (150, -135), (150, -105), (150, -75), (150, -45), (150, -30)]
+
+    #wind=90
+    #barbara:
+    #waypoints =[(0, 0), (15, 0), (45, -15), (75, -30), (105, -45), (135, -30), (150, -30)]
+
+    #2024:
+    #waypoints =[(0, 0), (15, 0), (30, 0), (45, 0), (60, 0), (105, -15), (150, -30)]
+
+    #2010:
+    #waypoints =[(0, 0), (15, 0), (45, -15), (75, -30), (105, -45), (135, -30), (150, -30)]
+
+
+
+
+
+    #plot_before(waypoints, obstacles)
+    print("Waypoints gerados :")
+    for wp in waypoints:
+        print(wp)
     plot_before(waypoints,obstacles)
     cap.setMission(np.array(waypoints, dtype=np.float32))
     cap.engage()
