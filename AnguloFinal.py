@@ -54,19 +54,20 @@ def distancia(p1, p2):
 
 def filtrar_obstaculos_relevantes(obstacles, current_pos, goal):
     dist_barco_ate_goal = distancia(current_pos, goal)
-    return [obs for obs in obstacles if distancia(obs, current_pos) <= dist_barco_ate_goal]
+    return [obs for obs in obstacles
+            if distancia(obs, current_pos) <= dist_barco_ate_goal]
 
 
 if __name__ == "__main__":
     #--------------------------------------------------------------------------------------
     # PARAMETROS
     truewind = [0, 6]
-    goal = [100,0]
+    goal = [100,-10]
     #obstacles = [(50, 20), (50, 40), (50, 0)]
-    obstacles=[(100,4)]
+    obstacles=[(50,-50),(50,60)]
     currentPos = [0, 0]
     currentHdg = 0
-    windHdgGlobal = 90
+    windHdgGlobal = 0
     #--------------------------------------------------------------------------------------
     obstacles_filtrados = filtrar_obstaculos_relevantes(obstacles, currentPos, goal)
     obstaclesHdgGlobal = headingOBS(obstacles_filtrados, currentPos)
