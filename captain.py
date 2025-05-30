@@ -1,4 +1,5 @@
-#!/home/enz/miniconda3/envs/esailor/bin/python
+#!/usr/bin/env python3
+
 
 import numpy as np
 import time
@@ -13,6 +14,21 @@ from sensor_msgs.msg import LaserScan
 distanciatotal=0
 class captain():
     def __init__(self, frequence = 2.0):
+
+        # --------------------------------------------------------------------------------------
+        # PARAMETROS
+        self.truewind = [0, 6]
+        # self.obstacles = [(50, 20), (50, 40), (50, 0)]
+        self.obstacles = [(50,0),(50,10),(50,-10),(70,0),(80,0)]
+        self.windHdgGlobal = 180
+        self.ultimo_angulo_navegacao = None
+        # --------------------------------------------------------------------------------------
+
+
+
+
+
+
         self.cps            = None
         self.apwind_speed   = 0
         self.apwind_angle   = 0
@@ -20,23 +36,24 @@ class captain():
         self.boat_vel       = np.zeros(2, dtype=np.float32)
         self.laser_scan     = np.zeros(5, dtype=int)
         self.waypoints_list = None
-        self.obstacles=[(50,0),(48,2),(75,-8)]
+        #self.obstacles=[(50,50)]
+        #self.obstacles=[(50,0),(48,2),(75,-8)]
         #self.obstacles= [(75, -15), (75, 0), (75, 15), (75, 30),(50,-20), (75, 45), (75, 60), (75, 75), (75, 90), (90,-35),(75, 105), (75, 120), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45), (120, -60), (120, -75), (120, -90), (120, -105), (120, -120)]
         self.pos_barco = []
         self.timestep       = 1.0 / frequence
         self._cps_log       = []
-        self.K_ATT = 300.0
-        self.K_REP = 50000.0
+        self.K_ATT = 1
+        self.K_REP = 150
         self.RHO_0 = 30.0
 
         # --- Parâmetros de Navegação e Vento ---
-        self.WIND_DIRECTION_MET_DEG = 180.0
+        self.WIND_DIRECTION_MET_DEG = 0
         self.UPWIND_NO_GO_HALF_ANGLE_DEG = 45.0
         self.DOWNWIND_NO_GO_HALF_ANGLE_DEG = 15.0
 
         # --- Parâmetros de Histerese (Diferenciados) ---
-        self.GH_UPWIND = 300.0
-        self.GH_DOWNWIND = 250.0
+        self.GH_UPWIND = 40.0
+        self.GH_DOWNWIND = 70.0
 
         # --- Parâmetros da Simulação ---
         self.STEP_SIZE = 0.1
@@ -149,32 +166,6 @@ class captain():
     #     print("FORCA REPULSIVA: ",F_rep)
     #     return F_rep
 
-    def repulsive_force(self, pos, obstacles, k_rep, rho_0,goal):
-        """Calcula a força repulsiva total de forma simples."""
-        F_rep = np.zeros(2)  # Inicia o vetor de força repulsiva
-        if not obstacles:
-            return F_rep
-
-        for obs in obstacles:
-            diff = pos - obs  # Vetor que vai do obstáculo até o barco
-            rho = np.linalg.norm(diff)  # Distância até o obstáculo
-            diffgoal=pos-goal
-            diffobs=obs-goal
-            rhobarcoway=np.linalg.norm(diffgoal)
-            print("DISTANCIA BARCO ->WAY:",rhobarcoway)
-            rhoobsway=np.linalg.norm(diffobs)
-            print("DISTANCIA OBS ->WAY:",rhoobsway)
-            # Aplica força repulsiva somente se o obstáculo estiver dentro do alcance
-            if 0 < rho <= rho_0:
-                # A força aumenta proporcionalmente ao inverso da distância
-                gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
-
-                # Aplica a força ao vetor direção (gradiente) do obstáculo
-                F_rep += gradient_magnitude * (diff / rho)
-
-        print("FORÇA REPULSIVA: ", F_rep)  # Para depuração
-        return F_rep
-
     # def repulsive_force(self, pos, obstacles, k_rep, rho_0,goal):
     #     """Calcula a força repulsiva total de forma simples."""
     #     F_rep = np.zeros(2)  # Inicia o vetor de força repulsiva
@@ -192,15 +183,172 @@ class captain():
     #         print("DISTANCIA OBS ->WAY:",rhoobsway)
     #         # Aplica força repulsiva somente se o obstáculo estiver dentro do alcance
     #         if 0 < rho <= rho_0:
-    #             if rhobarcoway>rhoobsway:
-    #                 # A força aumenta proporcionalmente ao inverso da distância
-    #                 gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
+    #             # A força aumenta proporcionalmente ao inverso da distância
+    #             gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
     #
-    #                 # Aplica a força ao vetor direção (gradiente) do obstáculo
-    #                 F_rep += gradient_magnitude * (diff / rho)
+    #             # Aplica a força ao vetor direção (gradiente) do obstáculo
+    #             F_rep += gradient_magnitude * (diff / rho)
     #
     #     print("FORÇA REPULSIVA: ", F_rep)  # Para depuração
     #     return F_rep
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def heading(self,candidate, current_pos):
+        x_move = candidate[0] - current_pos[0]
+        y_move = candidate[1] - current_pos[1]
+        hdg = int(np.degrees(np.arctan2(y_move, x_move)))
+        return (hdg + 360) % 360
+
+    def headingOBS(self,obstacles, current_pos):
+        obsHeadings = []
+        for x in obstacles:
+            x_move = x[0] - current_pos[0]
+            y_move = x[1] - current_pos[1]
+            hdg = int(np.degrees(np.arctan2(y_move, x_move)))
+            obsHeadings.append((hdg + 360) % 360)
+        return obsHeadings
+
+    def varredura(self,angles, goalHdg,currentHdg):
+        if not angles:
+            return None
+        #------------------ histerese
+        closest_angle = min(angles, key=lambda x: min(abs(x - goalHdg), 360 - abs(x - goalHdg)))
+        return closest_angle
+
+    # def varredura(self, angles, goalHdg, currentHdg):
+    #     if not angles:
+    #         return None
+    #
+    #     def diff(a, b):
+    #         """Menor diferença angular entre dois ângulos"""
+    #         return (a - b + 360) % 360
+    #
+    #     # Cálculo da diferença atual do barco para o objetivo
+    #     delta = diff(goalHdg, currentHdg)  # 0 a 359
+    #     lado_atual = 'cw' if delta <= 180 else 'ccw'  # cw = sentido horário
+    #
+    #     # Atualiza a direção preferida se ainda não houver histórico
+    #     if not hasattr(self, 'ultimo_lado'):
+    #         self.ultimo_lado = lado_atual
+    #
+    #     # Se o heading ideal está disponível, pode seguir direto
+    #     if goalHdg in angles:
+    #         self.ultimo_lado = lado_atual
+    #         return goalHdg
+    #
+    #     # Caso contrário, filtra os ângulos no mesmo lado do heading
+    #     def lado_de(x):
+    #         d = diff(x, goalHdg)
+    #         return 'cw' if d <= 180 else 'ccw'
+    #
+    #     candidatos = [a for a in angles if lado_de(a) == self.ultimo_lado]
+    #
+    #     if not candidatos:
+    #         # Se não houver ângulos no mesmo lado, pega o mais próximo em qualquer lado
+    #         return min(angles, key=lambda x: min(abs(x - goalHdg), 360 - abs(x - goalHdg)))
+    #
+    #     # Dentro dos candidatos no mesmo lado, escolhe o mais próximo do objetivo
+    #     melhor = min(candidatos, key=lambda x: min(abs(x - goalHdg), 360 - abs(x - goalHdg)))
+    #     return melhor
+    # def varredura(self, angles, goalHdg,currentHdg):
+    #     if not angles:
+    #         return None
+    #
+    #     if goalHdg in angles:
+    #         closest_angle = min(angles, key=lambda x: min(abs(x - goalHdg), 360 - abs(x - goalHdg)))
+    #         self.ultimo_angulo_navegacao = closest_angle
+    #         return closest_angle
+    #     else:
+    #         if self.ultimo_angulo_navegacao!=None:
+    #             if goalHdg<self.ultimo_angulo_navegacao:
+    #                 closest_angle = min(angles, key=lambda x: min(abs(x - (goalHdg-self.ultimo_angulo_navegacao)), 360 - abs(x - (goalHdg-self.ultimo_angulo_navegacao - goalHdg))))
+    #                 self.ultimo_angulo_navegacao = closest_angle
+    #                 return closest_angle
+    #             else:
+    #                 closest_angle = min(angles, key=lambda x: min(abs(x - (self.ultimo_angulo_navegacao-goalHdg)), 360 - abs(x - (self.ultimo_angulo_navegacao-goalHdg-goalHdg))))
+    #                 self.ultimo_angulo_navegacao = closest_angle
+    #                 return closest_angle
+    #         else:
+    #             closest_angle = min(angles, key=lambda x: min(abs(x - goalHdg), 360 - abs(x - goalHdg)))
+    #             self.ultimo_angulo_navegacao = closest_angle
+    #             return closest_angle
+    def angulosPossiveis(self,obstaclesHdg, windHdg):
+        angles = list(range(360))
+        angMinObs = 20
+
+        for i in range(50):
+            angles = [a for a in angles if a != (windHdg + i) % 360 and a != (windHdg - i) % 360]
+        tailHdg = (windHdg + 180) % 360
+        for i in range(30):
+            angles = [a for a in angles if a != (tailHdg + i) % 360 and a != (tailHdg - i) % 360]
+        for x in obstaclesHdg:
+            for i in range(angMinObs):
+                angles = [a for a in angles if a != (x + i) % 360 and a != (x - i) % 360]
+
+        return angles
+
+    def normalize_angle(self,angle, currentHdg):
+        return int(angle - currentHdg + 360) % 360
+
+    def distancia(self,p1, p2):
+        return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+    def filtrar_obstaculos_relevantes(self,obstacles, current_pos, goal):
+        dist_barco_ate_goal = self.distancia(current_pos, goal)
+        return [obs for obs in obstacles if self.distancia(obs, current_pos) <= dist_barco_ate_goal]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def repulsive_force(self, pos, obstacles, k_rep, rho_0,goal):
+        """Calcula a força repulsiva total de forma simples."""
+        F_rep = np.zeros(2)  # Inicia o vetor de força repulsiva
+        if not obstacles:
+            return F_rep
+
+        for obs in obstacles:
+            diff = pos - obs  # Vetor que vai do obstáculo até o barco
+            rho = np.linalg.norm(diff)  #Distância até o obstáculo
+            diffgoal=pos-goal
+            diffobs=obs-goal
+            rhobarcoway=np.linalg.norm(diffgoal)
+            print("DISTANCIA BARCO ->WAY:",rhobarcoway)
+            rhoobsway=np.linalg.norm(diffobs)
+            print("DISTANCIA OBS ->WAY:",rhoobsway)
+            # Aplica força repulsiva somente se o obstáculo estiver dentro do alcance
+            if 0 < rho <= rho_0:
+                if rhobarcoway>rhoobsway:
+                    # A força aumenta proporcionalmente ao inverso da distância
+                    gradient_magnitude = k_rep * (1 / rho)  # A repulsão aumenta com a proximidade
+
+                    # Aplica a força ao vetor direção (gradiente) do obstáculo
+                    F_rep += gradient_magnitude * (diff / rho)
+
+        print("FORÇA REPULSIVA: ", F_rep)  # Para depuração
+        return F_rep
 
     # ---- FUNÇÃO MODIFICADA ----
     def calculate_hysteresis_force(self,current_heading_deg, upwind_math_deg, Gh_upwind, Gh_downwind):
@@ -216,10 +364,10 @@ class captain():
         # Se |ângulo| > 90, considera downwind/reaching, usa Gh_downwind
         if abs(relative_wind_deg) <= 90.0:
             current_Gh = Gh_upwind
-            # print(f"Iter using Gh_upwind = {current_Gh}") # Debug opcional
+            print(f"Iter using Gh_upwind = {current_Gh}") # Debug opcional
         else:
             current_Gh = Gh_downwind
-            # print(f"Iter using Gh_downwind = {current_Gh}") # Debug opcional
+            print(f"Iter using Gh_downwind = {current_Gh}") # Debug opcional
 
         # Aplica força lateral baseada no bordo com o ganho apropriado
         if relative_wind_deg > 1e-6:  # Bombordo (Vento relativo da Esquerda)
@@ -246,9 +394,15 @@ class captain():
         diff = (angle2_deg - angle1_deg + 180) % 360 - 180
         return diff
 
-    def is_in_no_go_zone(self,heading_deg, zone_center_deg, zone_half_angle):
+    def is_in_no_go_zone(self, heading_deg, zone_center_deg, zone_half_angle):
+        """
+        Verifica se o barco está dentro de uma zona de não navegação (no-go zone).
+        """
         diff = self.shortest_angle_diff(zone_center_deg, heading_deg)
-        return abs(diff) <= zone_half_angle + 1e-9
+        print(
+            f"Verificando zona: Angulo do barco = {heading_deg:.2f}°, Zona centro = {zone_center_deg:.2f}°, Diferença = {diff:.2f}°")
+        # A zona "no-go" é definida pela faixa de [zone_center_deg - zone_half_angle, zone_center_deg + zone_half_angle]
+        return abs(diff) <= zone_half_angle
 
     def find_closest_edge_heading(self,heading_deg, zone_center_deg, zone_half_angle):
         diff = self.shortest_angle_diff(zone_center_deg, heading_deg)
@@ -257,21 +411,32 @@ class captain():
         else:
             return (zone_center_deg - zone_half_angle + 360) % 360
 
-    def apply_no_go_constraints(self,desired_heading_deg, desired_direction):
+    def apply_no_go_constraints(self, desired_heading_deg, desired_direction):
+        print(
+            f"Verificando zonas para o ângulo desejado: {desired_heading_deg}°")  # Depuração para verificar se a função está sendo chamada
         final_heading_deg = desired_heading_deg
         final_direction = desired_direction
         adjusted = False
+
+        # Verifica se o barco está na zona upwind
         if self.is_in_no_go_zone(desired_heading_deg, self.UPWIND_MATH_DEG, self.UPWIND_NO_GO_HALF_ANGLE_DEG):
             final_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.UPWIND_MATH_DEG,
-                                                          self.UPWIND_NO_GO_HALF_ANGLE_DEG)
+                                                               self.UPWIND_NO_GO_HALF_ANGLE_DEG)
             adjusted = True
+            print(f"Corretivo: Ajustando para evitar zona upwind. Nova direção: {final_heading_deg}°")
+
+        # Verifica se o barco está na zona downwind
         elif self.is_in_no_go_zone(desired_heading_deg, self.WIND_MATH_DEG, self.DOWNWIND_NO_GO_HALF_ANGLE_DEG):
             final_heading_deg = self.find_closest_edge_heading(desired_heading_deg, self.WIND_MATH_DEG,
-                                                          self.DOWNWIND_NO_GO_HALF_ANGLE_DEG)
+                                                               self.DOWNWIND_NO_GO_HALF_ANGLE_DEG)
             adjusted = True
+            print(f"Corretivo: Ajustando para evitar zona downwind. Nova direção: {final_heading_deg}°")
+
+        # Se houve ajuste, atualiza a direção
         if adjusted:
             final_heading_rad = np.radians(final_heading_deg)
             final_direction = np.array([np.cos(final_heading_rad), np.sin(final_heading_rad)])
+
         return final_direction, final_heading_deg
 
     def run_simulation(self,X_ROBOT_START,X_GOAL):
@@ -333,7 +498,7 @@ class captain():
         #     print(f"\nObjetivo não alcançado após {1000} iterações.")
 
         #return np.array(trajectory), np.array(headings_deg_history)
-        return desired_heading_deg
+        return constrained_heading_deg
 
 
 
@@ -353,7 +518,7 @@ class captain():
         for k, waypoint in enumerate(self.waypoints_list):
             dist2goal = np.linalg.norm(np.subtract(waypoint, self.cps))
             steps     = 0
-            distancia_limite = 4 if k == len(self.waypoints_list) - 1 else 5
+            distancia_limite = 5 if k == len(self.waypoints_list) - 1 else 5
             while (dist2goal > distancia_limite) & (steps < 1000):
                 truewind, truewind_angle = self.trueWindEstimation()
                 true_line = np.subtract(waypoint, self.cps)
@@ -367,19 +532,19 @@ class captain():
                     goal_angle *= -1
                 else:
                     pass
-                self.propPwr_pub.publish(0)
-                # if abs(truewind_angle) > 136: #--> truewind_angle is the true wind vector angle from the surge axis
-                #     self.propPwr_pub.publish( 2 )
-                # else:
-                #     self.propPwr_pub.publish( 0 )
+                #self.propPwr_pub.publish(0)
+                if abs(truewind_angle) > 136: #--> truewind_angle is the true wind vector angle from the surge axis
+                    self.propPwr_pub.publish( 2 )
+                else:
+                    self.propPwr_pub.publish( 0 )
 
                 print("--------------------------------")
-                print("apwind_angle  : {:5.2f}".format(self.apwind_angle))
-                print("truewind_angle: {:5.2f}".format(truewind_angle))
-                print("goal_angle    : {:5.2f}".format(goal_angle))
-                print("angulo barco: {:5.2f}".format(alpha))
-                print("angulo objetivo: {:5.2f}".format(beta))
-                print("dist to goal  : {:5.2f}".format(dist2goal))
+                #print("apwind_angle  : {:5.2f}".format(self.apwind_angle))
+                #print("truewind_angle: {:5.2f}".format(truewind_angle))
+                #print("goal_angle    : {:5.2f}".format(goal_angle))
+                #print("angulo barco: {:5.2f}".format(alpha))
+                #print("angulo objetivo: {:5.2f}".format(beta))
+                #print("dist to goal  : {:5.2f}".format(dist2goal))
                 print("Goiing ")
 
                 theta = np.abs(truewind_angle - goal_angle)
@@ -406,13 +571,34 @@ class captain():
                     anguloAPF -= 360
 
 
-                print("ANGULO APF:",anguloAPF)
-                self.nav_angle_pub.publish(np.float32(anguloAPF))
-                #angulo apf- angulo barco
-                print("angulo publicado:",goal_angle)
+
+
+                obstacles_filtrados = self.filtrar_obstaculos_relevantes(self.obstacles, self.cps, waypoint)
+                obstaclesHdgGlobal = self.headingOBS(self.obstacles, self.cps)
+                print("obstacles hdg global",obstaclesHdgGlobal)
+                goalHdgGlobal = self.heading(waypoint, self.cps)
+                obstaclesHdg = [self.normalize_angle(h, alpha) for h in obstaclesHdgGlobal]
+                print("obstacles hdg:",obstaclesHdg)
+                goalHdg = self.normalize_angle(goalHdgGlobal, alpha)
+                windHdg = self.normalize_angle(self.windHdgGlobal, alpha)
+                angles = self.angulosPossiveis(obstaclesHdg, windHdg)
+                angFinal = self.varredura(angles, goalHdg,alpha)
+                if angFinal>180:
+                    angFinal-=360
+                print("ANGULO NOVO:",angFinal)
+
+                print("ANGULO APF:", anguloAPF)
+                #self.nav_angle_pub.publish(np.float32(anguloAPF))
+                self.nav_angle_pub.publish(np.float32(angFinal))
+                # angulo apf- angulo barco
+                print("angulo publicado:", goal_angle)
                 self.pos_barco.append(np.copy(self.cps))
                 time.sleep(self.timestep)
                 steps += 1
+
+                
+
+
             print(self.pos_barco)
 
             def calcular_distancia_total(pos_barco):
@@ -791,7 +977,8 @@ def main():
     goal = (100, 0)
     obstacles =  [(75, -15), (75, 0), (75, 15), (75, 30), (75, 45), (75, 60), (50,-20),(90,-35), (75, 75), (75, 90), (75, 105), (75, 120), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45), (120, -60), (120, -75), (120, -90), (120, -105), (120, -120)]
     #wind=0
-    obstacles=[(50,0),(48,2),(75,-8)]
+    obstacles = [(50,0),(50,10),(50,-10),(70,0),(80,0)]
+    #obstacles=[(50,50)]
     #barbara:(somente com motor)
     #waypoints =[(0, 0), (15, -30), (30, -60), (45, -90), (75, -120), (105, -150), (135, -120), (165, -90), (180, -60), (150, -30)]
 
@@ -820,7 +1007,7 @@ def main():
     print("Waypoints gerados :")
     for wp in waypoints:
         print(wp)
-    plot_before(waypoints,obstacles)
+    #plot_before(waypoints,obstacles)
     cap.setMission(np.array(waypoints, dtype=np.float32))
     cap.engage()
     boat_positions = np.array(cap.pos_barco, dtype=np.float32)
