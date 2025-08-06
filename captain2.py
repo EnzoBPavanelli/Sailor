@@ -14,7 +14,7 @@ class captain():
         self.truewind = [0, 6]
         # self.obstacles = [(50, 20), (50, 40), (50, 0)]
         #self.obstacles = [(50, 0), (50, 10), (50, -10), (70, 0), (80, 0)]
-        self.windHdgGlobal = 0
+        self.windHdgGlobal = 90
         self.ultimo_angulo_navegacao = None
         # --------------------------------------------------------------------------------------
         self.cps = None
@@ -82,11 +82,17 @@ class captain():
     def _laser_scan_callback(self, data):
         laser_ranges = np.asarray(data.ranges)
         laser_ranges[laser_ranges == np.inf] = data.range_max
-        self.laser_scan[4] = np.min(laser_ranges[0:23])
-        self.laser_scan[3] = np.min(laser_ranges[24:47])
-        self.laser_scan[2] = np.min(laser_ranges[48:72])
-        self.laser_scan[1] = np.min(laser_ranges[73:96])
-        self.laser_scan[0] = np.min(laser_ranges[97:120])
+
+        # self.laser_scan[4] = np.min(laser_ranges[0:23])
+        # self.laser_scan[3] = np.min(laser_ranges[24:47])
+        # self.laser_scan[2] = np.min(laser_ranges[48:72])
+        # self.laser_scan[1] = np.min(laser_ranges[73:96])
+        # self.laser_scan[0] = np.min(laser_ranges[97:120])
+        self.laser_scan_a = np.where(laser_ranges < 60)[0] * (-1)
+        self.laser_scan_d = laser_ranges[self.laser_scan_a]
+        self.laser_scan_a += 60
+        print(self.laser_scan_a)
+        print(self.laser_scan_d)
 
     def _wind_sensor_callback(self, msg):
         self.apwind_speed = msg.data[0]
@@ -660,7 +666,7 @@ def main():
     #obstacles = [(75, -15), (75, 0), (75, 15), (75, 30), (75, 45), (75, 60), (50, -20), (90, -35), (75, 75), (75, 90), (75, 105), (75, 120), (120, 15), (120, 0), (120, -15), (120, -30), (120, -45), (120, -60), (120, -75),(120, -90), (120, -105), (120, -120)]
     # wind=0
     #obstacles = [(50, 0), (50, 10), (50, -10), (70, 0), (80, 0)]
-    waypoints=[(0,0),(100,0)]
+    waypoints=[(0,0),(400,0)]
     # obstacles=[(50,50)]
     # barbara:(somente com motor)
     # waypoints =[(0, 0), (15, -30), (30, -60), (45, -90), (75, -120), (105, -150), (135, -120), (165, -90), (180, -60), (150, -30)]
