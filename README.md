@@ -34,7 +34,7 @@ O foco principal deste repositório é a lógica de navegação e cálculo do â
 ├── apfvetorialvento.py     # Lógica de forças artificiais considerando vento  
 ├── calculateapf.py         # Função base de cálculo de força atrativa e repulsiva  
 ├── captain.py              # Classe principal de decisão e controle  
-├── captain2.py             # Variante/backup do capitão (testes ou versões anteriores)
+├── captain2.py             # Variante do capitão 
 
 ---
 
