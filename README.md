@@ -56,7 +56,6 @@ Importante: Este repositório contém apenas a parte algorítmica do sistema. A 
 ## Contexto Acadêmico
 
 Projeto de Iniciação Científica – UFF  
-Orientador: [Nome do orientador, se desejar incluir]  
 Período: [2024–2025]  
 Tema: Inteligência Computacional Aplicada à Navegação Autônoma de Veleiros
 
